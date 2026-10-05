@@ -209,20 +209,3 @@ XGBoost 模型各项指标均优于决策树，预测效果更好。
 | 模型持久化 | joblib |
 | 闭环部署 | 增量重训 + 阈值权衡 |
 
-## 6. 目录结构
-
-```text
-o2o-coupon-analysis/
-├── README.md
-├── requirements.txt
-├── 实训1_探索性分析.py
-├── 实训2_数据预处理.py
-├── 实训3_构建模型.py
-├── 实训4_模型评价.py
-├── 实训5_部署与决策闭环.py
-├── feature_name1.py
-├── data/                 # 原始数据（本地存放，不上传）
-└── results/              # 生成的图表与预测结果
-    ├── decision_output.csv
-    ├── feedback.csv
-    └── xgb_model_retrained.pkl
