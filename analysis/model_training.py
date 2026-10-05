@@ -1,61 +1,127 @@
-########################构建决策树分类模型#########################
+# -*- coding: utf-8 -*-
+"""
+03 构建模型（含 GroupKFold 防泄漏）
+使用 GroupKFold 按 user_id 分组，避免同一用户跨集造成重叠泄漏
+"""
+
 import pandas as pd
-from sklearn.tree import DecisionTreeClassifier
+import numpy as np
 import warnings
+import joblib
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.model_selection import GroupKFold
+from sklearn.metrics import (accuracy_score, precision_score,
+                             recall_score, f1_score)
+import xgboost as xgb
 
 warnings.filterwarnings("ignore")
 
-# 读取数据
+
+# ----------------------------
+# 1. 读取数据
+# ----------------------------
 train_class = pd.read_csv('train_class.csv')
 test = pd.read_csv('test_cleaned.csv')
 
-# 定义要排除的列
-exclude_train = ['user_id', 'merchant_id', 'coupon_id', 'date_received', 'date', 'class']
-exclude_test = ['user_id', 'merchant_id', 'coupon_id', 'date_received']
+exclude_cols = ['user_id', 'merchant_id', 'coupon_id',
+                'date_received', 'date', 'class']
+feature_cols = [c for c in train_class.columns if c not in exclude_cols]
 
-# 分离特征和标签
-x_train = train_class.drop(columns=exclude_train, errors='ignore')
-y_train = train_class['class']
+X = train_class[feature_cols]
+y = train_class['class']
+groups = train_class['user_id']   # ★ 关键：按 user_id 分组
 
-x_test = test.drop(columns=exclude_test, errors='ignore')
+print(f"特征数：{len(feature_cols)}，样本数：{len(X)}，用户数：{groups.nunique()}")
 
-# 对齐特征列
-for col in x_train.columns:
-    if col not in x_test.columns:
-        x_test[col] = 0
-x_test = x_test[x_train.columns]   # 保持顺序一致
 
-# 决策树建模
-model_dt1 = DecisionTreeClassifier(max_leaf_nodes=16, random_state=123)
-model_dt1.fit(x_train, y_train)
+# ----------------------------
+# 2. GroupKFold 防泄漏验证
+# ----------------------------
+def evaluate_model(model, X, y, groups, n_splits=5):
+    """
+    用 GroupKFold 做交叉验证
+    返回: dict(模型名 -> dict(指标均值))
+    """
+    gkf = GroupKFold(n_splits=n_splits)
+    metrics = {'accuracy': [], 'precision': [], 'recall': [], 'f1': []}
 
-# 预测
-pre_dt = model_dt1.predict(x_test)
+    for fold, (train_idx, val_idx) in enumerate(gkf.split(X, y, groups=groups), 1):
+        X_tr, X_val = X.iloc[train_idx], X.iloc[val_idx]
+        y_tr, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
-# 保存预测结果
-dt_class = test[['user_id', 'merchant_id', 'coupon_id']].copy()
-dt_class['class'] = pre_dt
+        model_clone = model.__class__(**model.get_params())
+        model_clone.fit(X_tr, y_tr)
+        y_pred = model_clone.predict(X_val)
 
-# 导出数据
-dt_class.to_csv('dt_class.csv', index=False)
+        metrics['accuracy'].append(accuracy_score(y_val, y_pred))
+        metrics['precision'].append(precision_score(y_val, y_pred, zero_division=0))
+        metrics['recall'].append(recall_score(y_val, y_pred, zero_division=0))
+        metrics['f1'].append(f1_score(y_val, y_pred, zero_division=0))
 
-########################构建XGBoost分类模型#########################
-import xgboost as xgb
+        print(f"  Fold {fold}: acc={metrics['accuracy'][-1]:.4f}, "
+              f"prec={metrics['precision'][-1]:.4f}, "
+              f"rec={metrics['recall'][-1]:.4f}, "
+              f"f1={metrics['f1'][-1]:.4f}")
 
-# xgboost 模型
-model_test = xgb.XGBClassifier(max_depth=8, learning_rate=0.1, n_estimators=160,
-                               silent=True, objective='binary:logistic')
+    return {k: np.mean(v) for k, v in metrics.items()}
 
-# 模型训练
-model_test.fit(x_train, y_train)
 
-# 模型预测
-y_pred = model_test.predict(x_test)
+print("\n========== 决策树 GroupKFold 交叉验证 ==========")
+dt_model = DecisionTreeClassifier(max_leaf_nodes=16, random_state=123)
+dt_result = evaluate_model(dt_model, X, y, groups)
 
-# DataFrame 存放 xgboost 预测结果
-xg_b_class = test[['user_id', 'merchant_id', 'coupon_id']].copy()
-xg_b_class['class'] = y_pred
+print("\n========== XGBoost GroupKFold 交叉验证 ==========")
+xgb_model = xgb.XGBClassifier(
+    max_depth=8, learning_rate=0.1, n_estimators=160,
+    objective='binary:logistic', eval_metric='logloss', random_state=123
+)
+xgb_result = evaluate_model(xgb_model, X, y, groups)
 
-# 导出数据
-xgbfile_pre = 'xgb_class.csv'
-xg_b_class.to_csv(xgbfile_pre, index=False)
+
+# ----------------------------
+# 3. 对比结果
+# ----------------------------
+print("\n========== 模型对比（GroupKFold 均值）==========")
+result_df = pd.DataFrame({
+    'DecisionTree': dt_result,
+    'XGBoost': xgb_result,
+}).T
+print(result_df.round(4))
+result_df.to_csv('model_cv_results.csv')
+
+
+# ----------------------------
+# 4. 用全量数据训练最终模型
+# ----------------------------
+print("\n在全量训练集上训练最终模型...")
+final_dt = DecisionTreeClassifier(max_leaf_nodes=16, random_state=123)
+final_dt.fit(X, y)
+
+final_xgb = xgb.XGBClassifier(
+    max_depth=8, learning_rate=0.1, n_estimators=160,
+    objective='binary:logistic', eval_metric='logloss', random_state=123
+)
+final_xgb.fit(X, y)
+
+joblib.dump(final_dt, 'dt_model.pkl')
+joblib.dump(final_xgb, 'xgb_model.pkl')
+print("模型已保存：dt_model.pkl, xgb_model.pkl")
+
+
+# ----------------------------
+# 5. 预测测试集
+# ----------------------------
+test_X = test.reindex(columns=feature_cols, fill_value=0)
+
+dt_pred = final_dt.predict(test_X)
+xgb_pred = final_xgb.predict(test_X)
+
+dt_output = test[['user_id', 'merchant_id', 'coupon_id']].copy()
+dt_output['class'] = dt_pred
+dt_output.to_csv('dt_class.csv', index=False)
+
+xgb_output = test[['user_id', 'merchant_id', 'coupon_id']].copy()
+xgb_output['class'] = xgb_pred
+xgb_output.to_csv('xgb_class.csv', index=False)
+
+print("测试集预测完成")

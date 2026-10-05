@@ -1,68 +1,99 @@
-########################计算指标评价模型#########################
-#决策树
+# -*- coding: utf-8 -*-
+"""
+04 模型评价
+在独立验证集上评估模型，并绘制特征重要性
+"""
+
 import pandas as pd
-from sklearn import metrics
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import precision_score, recall_score, f1_score
-from sklearn.metrics import accuracy_score
-from sklearn.tree import DecisionTreeClassifier
-import warnings
-
-warnings.filterwarnings("ignore")
-trainfile_class = 'train_class.csv'  # 已预处理测试数据
-train_class = pd.read_csv(trainfile_class)
-x_train = train_class.drop(['user_id', 'merchant_id', 'coupon_id',
-                            'date_received', 'date'], axis=1)
-
-# 将训练样本划分训练样本和验证样本
-x_train1, x_test1, y_train1, y_test1 = train_test_split(x_train.iloc[:, :-1],
-                                                        x_train.iloc[:, -1],
-                                                        test_size=0.3,
-                                                        random_state=10)
-
-# 决策树建模
-model_dt_evaluate = DecisionTreeClassifier(max_leaf_nodes=16,
-                                           random_state=123).fit(x_train1,
-                                                                 y_train1)
-model_dt_pre = model_dt_evaluate.predict(x_test1)  # 预测结果
-
-# 决策树模型评价指标值
-print(metrics.classification_report(y_test1, model_dt_pre))
-dt_evaluate_accuracy = accuracy_score(y_test1, model_dt_pre)
-print('准确率为%.2f%%:' % (dt_evaluate_accuracy * 100.0))
-dt_evaluate_p = precision_score(y_test1, model_dt_pre)
-print('精确率为%.2f%% ' % (dt_evaluate_p * 100.0))
-dt_evaluate_recall = recall_score(y_test1, model_dt_pre)
-print('召回率为%.2f%% ' % (dt_evaluate_recall * 100.0))
-dt_evaluate_fl = f1_score(y_test1, model_dt_pre)
-print('F1值为%.2f%% ' % (dt_evaluate_fl * 100.0))
-
-#xgboost
+import numpy as np
+import matplotlib.pyplot as plt
+import platform
+import joblib
 import xgboost as xgb
+from sklearn.model_selection import GroupShuffleSplit
+from sklearn.metrics import (accuracy_score, precision_score,
+                             recall_score, f1_score,
+                             classification_report)
 
-model_xgb_evaluate = xgb.XGBClassifier(max_depth=8, learning_rate=0.1,
-                                       n_estimators=160, silent=True,
-                                       objective='binary:logistic')
-model_xgb_evaluate.fit(x_train1, y_train1)
+# ----- 修复中文显示 -----
+system = platform.system()
+if system == 'Windows':
+    plt.rcParams['font.sans-serif'] = ['SimHei']
+elif system == 'Darwin':
+    plt.rcParams['font.sans-serif'] = ['PingFang SC']
+else:
+    plt.rcParams['font.sans-serif'] = ['WenQuanYi Zen Hei', 'Noto Sans CJK SC']
+plt.rcParams['axes.unicode_minus'] = False
 
-# 对验证样本进行预测
-model_xgb_pre = model_xgb_evaluate.predict(x_test1)
 
-# xgboost 模型评价指标
-print(metrics.classification_report(y_test1, model_xgb_pre))
-xfb_evaluate_accuracy = accuracy_score(y_test1, model_xgb_pre)
-print('准确率为:%.2f%%' % (xfb_evaluate_accuracy * 100.0))
-xfb_evaluate_p = precision_score(y_test1, model_xgb_pre)
-print('精确率为:%.2f%%' % (xfb_evaluate_p * 100.0))
-xfb_evaluate_recall = recall_score(y_test1, model_xgb_pre)
-print('召回率为:%.2f%%' % (xfb_evaluate_recall * 100.0))
-xfb_evaluate_fl = f1_score(y_test1, model_xgb_pre)
-print('F1值为:%.2f%%' % (xfb_evaluate_fl * 100.0))
+# ----------------------------
+# 1. 划分独立验证集（按 user_id 分组）
+# ----------------------------
+train_class = pd.read_csv('train_class.csv')
 
-########################绘制属性重要性评分图#########################
-from matplotlib import pyplot as plt
-from xgboost import plot_importance
+exclude_cols = ['user_id', 'merchant_id', 'coupon_id',
+                'date_received', 'date', 'class']
+feature_cols = [c for c in train_class.columns if c not in exclude_cols]
 
-# 显示重要指标
-plot_importance(model_xgb_evaluate)
-plt.show()
+X = train_class[feature_cols]
+y = train_class['class']
+groups = train_class['user_id']
+
+gss = GroupShuffleSplit(n_splits=1, test_size=0.3, random_state=10)
+train_idx, val_idx = next(gss.split(X, y, groups=groups))
+
+X_tr, X_val = X.iloc[train_idx], X.iloc[val_idx]
+y_tr, y_val = y.iloc[train_idx], y.iloc[val_idx]
+
+print(f"训练集：{len(X_tr)}，验证集：{len(X_val)}")
+print(f"训练集正样本率：{y_tr.mean():.4f}，验证集正样本率：{y_val.mean():.4f}")
+
+
+# ----------------------------
+# 2. 加载已训练模型
+# ----------------------------
+dt_model = joblib.load('dt_model.pkl')
+xgb_model = joblib.load('xgb_model.pkl')
+
+
+# ----------------------------
+# 3. 模型评估
+# ----------------------------
+def eval_on_val(model, X_val, y_val, name):
+    y_pred = model.predict(X_val)
+    print(f"\n========== {name} ==========")
+    print(classification_report(y_val, y_pred, digits=4))
+    return {
+        'accuracy': accuracy_score(y_val, y_pred),
+        'precision': precision_score(y_val, y_pred, zero_division=0),
+        'recall': recall_score(y_val, y_pred, zero_division=0),
+        'f1': f1_score(y_val, y_pred, zero_division=0),
+    }
+
+
+dt_metrics = eval_on_val(dt_model, X_val, y_val, "决策树")
+xgb_metrics = eval_on_val(xgb_model, X_val, y_val, "XGBoost")
+
+metrics_df = pd.DataFrame({'DecisionTree': dt_metrics, 'XGBoost': xgb_metrics}).T
+metrics_df.to_csv('model_eval_results.csv')
+print("\n========== 汇总 ==========")
+print(metrics_df.round(4))
+
+
+# ----------------------------
+# 4. XGBoost 特征重要性
+# ----------------------------
+fig, ax = plt.subplots(figsize=(10, 8))
+xgb.plot_importance(xgb_model, ax=ax, importance_type='gain')
+plt.title('XGBoost 特征重要性 (gain)')
+plt.tight_layout()
+plt.savefig('06_特征重要性.png', dpi=150, bbox_inches='tight')
+plt.close()
+
+# 输出特征重要性排名
+importance = pd.Series(
+    xgb_model.get_booster().get_score(importance_type='gain')
+).sort_values(ascending=False)
+importance.to_csv('feature_importance.csv')
+print("\n特征重要性 Top5：")
+print(importance.head(5))
