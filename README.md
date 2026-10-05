@@ -1,7 +1,7 @@
 # O2O优惠券个性化投放预测与业务策略分析
 > 基于用户、商户、优惠券多维特征的机器学习建模与业务决策支持 —— 从探索性分析、特征工程到模型评价与决策闭环的完整分析流程
 
-[![Python](https://img.shields.io/badge/Python-3.x-blue)]()
+[![Python](https://img.shields.io/badge/Python-3.12-blue)]()
 [![XGBoost](https://img.shields.io/badge/XGBoost-分类-orange)]()
 [![GroupKFold](https://img.shields.io/badge/GroupKFold-防泄漏-green)]()
 [![DecisionTree](https://img.shields.io/badge/DecisionTree-基线-red)]()
